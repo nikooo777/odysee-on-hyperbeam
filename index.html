@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>odysee-on-hb — verified stream inspector</title>
+  </head>
+  <body>
+    <div id="app">
+      <header>
+        <h1>odysee-on-hb</h1>
+        <p class="subtitle">
+          Drop in a claim id, name, or URL. Every step below is re-verified in
+          this browser — the HyperBEAM node is treated as an untrusted courier.
+        </p>
+        <div class="controls">
+          <label>
+            node
+            <input id="node-url" type="text" spellcheck="false" />
+          </label>
+          <label class="grow">
+            claim id / name / URL
+            <input
+              id="target"
+              type="text"
+              spellcheck="false"
+              placeholder="9cc7f0e3de8db3b2ffd6dc0b4f1a0f0ca48a6b49"
+            />
+          </label>
+          <label>
+            tamper harness
+            <select id="tamper"></select>
+          </label>
+          <button id="verify">verify</button>
+        </div>
+      </header>
+      <div id="banner" class="banner" hidden></div>
+      <ol id="steps" class="steps"></ol>
+      <section id="playback-section" hidden>
+        <div class="playback-controls">
+          <button id="play-stream">play (streamed via node — transport-trusted)</button>
+          <button id="play-verified" disabled>
+            verified playback (requires full blob sweep)
+          </button>
+          <button id="sweep">verify all blobs</button>
+          <span id="sweep-progress"></span>
+        </div>
+        <div id="player"></div>
+      </section>
+    </div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
