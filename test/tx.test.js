@@ -2,23 +2,23 @@ import { describe, it, expect } from 'vitest';
 import { parseTxHex, parseClaimEnvelope, claimOutputAt, TxParseError } from '../src/lbry/tx.js';
 import { utf8Decode } from '../src/lbry/bytes.js';
 import {
-  TASK0_TX_HEX,
-  TASK0_TXID,
-  TASK0_PREV_TXID,
-  TASK0_CLAIM_ID,
-  TASK0_SIGNING_CHANNEL_ID,
+  ONCHAIN_TX_HEX,
+  ONCHAIN_TXID,
+  ONCHAIN_PREV_TXID,
+  ONCHAIN_CLAIM_ID,
+  ONCHAIN_SIGNING_CHANNEL_ID,
 } from './fixtures.js';
 
-describe('parseTxHex (Task-0 vector)', () => {
-  const tx = parseTxHex(TASK0_TX_HEX);
+describe('parseTxHex (real on-chain vector)', () => {
+  const tx = parseTxHex(ONCHAIN_TX_HEX);
 
   it('computes the txid', () => {
-    expect(tx.txid).toBe(TASK0_TXID);
+    expect(tx.txid).toBe(ONCHAIN_TXID);
   });
 
   it('parses the first input outpoint', () => {
     expect(tx.inputs).toHaveLength(1);
-    expect(tx.inputs[0].prevTxid).toBe(TASK0_PREV_TXID);
+    expect(tx.inputs[0].prevTxid).toBe(ONCHAIN_PREV_TXID);
     expect(tx.inputs[0].prevNout).toBe(1);
     expect(tx.inputs[0].signatureDigestPiece).toHaveLength(36);
   });
@@ -32,14 +32,14 @@ describe('parseTxHex (Task-0 vector)', () => {
   it('derives the create-claim claim id via hash160', () => {
     const output = claimOutputAt(tx, 0);
     expect(output.claimOp).toBe('create');
-    expect(output.claimId).toBe(TASK0_CLAIM_ID);
+    expect(output.claimId).toBe(ONCHAIN_CLAIM_ID);
   });
 
   it('parses the signed v2 claim envelope', () => {
     const envelope = claimOutputAt(tx, 0).claimEnvelope;
     expect(envelope.encoding).toBe('v2-protobuf');
     expect(envelope.signed).toBe(true);
-    expect(envelope.signingChannelId).toBe(TASK0_SIGNING_CHANNEL_ID);
+    expect(envelope.signingChannelId).toBe(ONCHAIN_SIGNING_CHANNEL_ID);
     expect(envelope.claimSignature).toHaveLength(64);
     expect(envelope.message.length).toBeGreaterThan(0);
   });
@@ -78,10 +78,10 @@ describe('parseClaimEnvelope', () => {
 
 describe('parse failures', () => {
   it('rejects truncated transactions', () => {
-    expect(() => parseTxHex(TASK0_TX_HEX.slice(0, 100))).toThrow(TxParseError);
+    expect(() => parseTxHex(ONCHAIN_TX_HEX.slice(0, 100))).toThrow(TxParseError);
   });
 
   it('rejects trailing bytes', () => {
-    expect(() => parseTxHex(TASK0_TX_HEX + '00')).toThrow(TxParseError);
+    expect(() => parseTxHex(ONCHAIN_TX_HEX + '00')).toThrow(TxParseError);
   });
 });

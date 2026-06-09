@@ -49,7 +49,7 @@ export async function runPipeline({ input, hb, report, tamper = {} }) {
     target.kind === 'claim-id' ? 'verified' : 'trusted',
     target.kind === 'claim-id'
       ? `claim_id root: ${target.value}`
-      : `${target.kind} input — winning-claim mapping is SDK-trusted (tier 3)`,
+      : `${target.kind} input — winning-claim mapping is SDK-trusted`,
     [`kind: ${target.kind}`, `target: ${target.value}`]
   );
 
@@ -507,7 +507,7 @@ async function serverCrossCheckStep(state, hb, hooks, report) {
         'cross-check',
         'na',
         'server fails closed on unsigned claims (verified-stream requires a channel signature)',
-        [`server: fail-closed (${reason})`, 'client: tier 2 not applicable — consistent']
+        [`server: fail-closed (${reason})`, 'client: channel attestation not applicable — consistent']
       );
       return;
     }

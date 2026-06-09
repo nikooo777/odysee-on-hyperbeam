@@ -2,16 +2,16 @@ import { describe, it, expect } from 'vitest';
 import { streamSdHash, channelPublicKey, ProtoError } from '../src/lbry/proto.js';
 import { parseTxHex, claimOutputAt } from '../src/lbry/tx.js';
 import {
-  TASK0_TX_HEX,
-  TASK0_SD_HASH,
+  ONCHAIN_TX_HEX,
+  ONCHAIN_SD_HASH,
   protoField,
 } from './fixtures.js';
 
 describe('streamSdHash', () => {
-  it('extracts the sd_hash from the Task-0 signed claim message', () => {
-    const tx = parseTxHex(TASK0_TX_HEX);
+  it('extracts the sd_hash from the on-chain signed claim message', () => {
+    const tx = parseTxHex(ONCHAIN_TX_HEX);
     const envelope = claimOutputAt(tx, 0).claimEnvelope;
-    expect(streamSdHash(envelope.message)).toBe(TASK0_SD_HASH);
+    expect(streamSdHash(envelope.message)).toBe(ONCHAIN_SD_HASH);
   });
 
   it('fails on a message without a stream field', () => {

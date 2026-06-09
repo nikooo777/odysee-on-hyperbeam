@@ -7,20 +7,20 @@ import {
 } from '../src/lbry/attestation.js';
 import { parseTxHex, claimOutputAt } from '../src/lbry/tx.js';
 import { hexToBytes, bytesToHex, concatBytes } from '../src/lbry/bytes.js';
-import { TASK0_TX_HEX, TASK0_CHANNEL_PUBKEY_HEX } from './fixtures.js';
+import { ONCHAIN_TX_HEX, ONCHAIN_CHANNEL_PUBKEY_HEX } from './fixtures.js';
 
-function task0Parts() {
-  const tx = parseTxHex(TASK0_TX_HEX);
+function onchainParts() {
+  const tx = parseTxHex(ONCHAIN_TX_HEX);
   return {
     firstInput: tx.inputs[0],
     envelope: claimOutputAt(tx, 0).claimEnvelope,
-    publicKey: hexToBytes(TASK0_CHANNEL_PUBKEY_HEX),
+    publicKey: hexToBytes(ONCHAIN_CHANNEL_PUBKEY_HEX),
   };
 }
 
-describe('verifyClaimSignature (Task-0 real on-chain signature)', () => {
+describe('verifyClaimSignature (real on-chain signature)', () => {
   it('verifies the real channel signature', () => {
-    const { firstInput, envelope, publicKey } = task0Parts();
+    const { firstInput, envelope, publicKey } = onchainParts();
     const digest = signatureDigest(firstInput, envelope);
     expect(
       verifyClaimSignature(envelope.claimSignature, digest, publicKey)
@@ -28,7 +28,7 @@ describe('verifyClaimSignature (Task-0 real on-chain signature)', () => {
   });
 
   it('rejects a tampered signature', () => {
-    const { firstInput, envelope, publicKey } = task0Parts();
+    const { firstInput, envelope, publicKey } = onchainParts();
     const digest = signatureDigest(firstInput, envelope);
     const tampered = Uint8Array.from(envelope.claimSignature);
     tampered[10] ^= 0xff;
@@ -36,7 +36,7 @@ describe('verifyClaimSignature (Task-0 real on-chain signature)', () => {
   });
 
   it('rejects a tampered message', () => {
-    const { firstInput, envelope, publicKey } = task0Parts();
+    const { firstInput, envelope, publicKey } = onchainParts();
     const tamperedMessage = Uint8Array.from(envelope.message);
     tamperedMessage[0] ^= 0x01;
     const digest = signatureDigest(firstInput, {
@@ -49,7 +49,7 @@ describe('verifyClaimSignature (Task-0 real on-chain signature)', () => {
   });
 
   it('rejects the wrong public key', () => {
-    const { firstInput, envelope } = task0Parts();
+    const { firstInput, envelope } = onchainParts();
     const digest = signatureDigest(firstInput, envelope);
     const wrongKey = hexToBytes(
       '0378ff344cc1f8a5451e7b8f348670b20c44ae44704ac05c59fb936ac1a4f26769'
@@ -60,7 +60,7 @@ describe('verifyClaimSignature (Task-0 real on-chain signature)', () => {
   });
 
   it('rejects malformed inputs without throwing', () => {
-    const { firstInput, envelope, publicKey } = task0Parts();
+    const { firstInput, envelope, publicKey } = onchainParts();
     const digest = signatureDigest(firstInput, envelope);
     expect(verifyClaimSignature(new Uint8Array(63), digest, publicKey)).toBe(
       false
@@ -72,18 +72,18 @@ describe('verifyClaimSignature (Task-0 real on-chain signature)', () => {
 });
 
 describe('normalizePublicKey', () => {
-  const compressed = hexToBytes(TASK0_CHANNEL_PUBKEY_HEX);
+  const compressed = hexToBytes(ONCHAIN_CHANNEL_PUBKEY_HEX);
   const uncompressed = secp.Point.fromBytes(compressed).toBytes(false);
 
   it('passes through a valid compressed key', () => {
     expect(bytesToHex(normalizePublicKey(compressed))).toBe(
-      TASK0_CHANNEL_PUBKEY_HEX
+      ONCHAIN_CHANNEL_PUBKEY_HEX
     );
   });
 
   it('compresses a bare uncompressed point', () => {
     expect(bytesToHex(normalizePublicKey(uncompressed))).toBe(
-      TASK0_CHANNEL_PUBKEY_HEX
+      ONCHAIN_CHANNEL_PUBKEY_HEX
     );
   });
 
@@ -94,7 +94,7 @@ describe('normalizePublicKey', () => {
     );
     expect(spki).toHaveLength(88);
     expect(bytesToHex(normalizePublicKey(spki))).toBe(
-      TASK0_CHANNEL_PUBKEY_HEX
+      ONCHAIN_CHANNEL_PUBKEY_HEX
     );
   });
 
@@ -105,7 +105,7 @@ describe('normalizePublicKey', () => {
     );
     expect(spki).toHaveLength(56);
     expect(bytesToHex(normalizePublicKey(spki))).toBe(
-      TASK0_CHANNEL_PUBKEY_HEX
+      ONCHAIN_CHANNEL_PUBKEY_HEX
     );
   });
 
