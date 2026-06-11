@@ -304,10 +304,16 @@ async function channelEvidenceStep(state, hb, hooks, report) {
     claimOp: channelOutput.claimOp,
   };
   state.verdicts.channelHashValid = true;
+  // An update claim only asserts its claim_id in-script, so the binding of
+  // this public key to the channel id is assertion-level until the create-tx
+  // chain is walked — mirror the claim-output step's honesty about it.
+  const assertedBinding = channelOutput.claimOp !== 'create';
   report(
     'channel',
-    'verified',
-    `channel ${expectedChannelId} bound to raw on-chain claim`,
+    assertedBinding ? 'trusted' : 'verified',
+    assertedBinding
+      ? `channel ${expectedChannelId} bound via update claim — assertion-level binding`
+      : `channel ${expectedChannelId} bound to raw on-chain claim`,
     [
       `channel outpoint: ${channelTxid}:${channelNout}`,
       `channel claim op: ${channelOutput.claimOp}`,
@@ -315,6 +321,9 @@ async function channelEvidenceStep(state, hb, hooks, report) {
       `public key (from raw channel protobuf, not SDK): ${bytesToHex(publicKey)}`,
       rawKey.length !== 33
         ? `normalized from ${rawKey.length}-byte DER/SPKI encoding (legacy channel)`
+        : null,
+      assertedBinding
+        ? 'update claims assert their claim_id in-script; the create-tx chain is not walked'
         : null,
     ].filter(Boolean)
   );
@@ -527,11 +536,25 @@ async function serverCrossCheckStep(state, hb, hooks, report) {
     return;
   }
   const attestation = await hb.deref(server, 'attestation');
+  // The server labels its claim-id binding strength per side
+  // (claim-proof-strength, channel-claim-proof-strength) and combined
+  // (proof-strength). The client re-derives what it can: a create binds
+  // hash-derived, an update binds asserted unless the server proved create
+  // ancestry — ancestor-derived — which the client cannot re-derive (yet)
+  // and accepts as trusted, after checking the labels are internally
+  // consistent: each side label must match its claim op, and the combined
+  // label must be the weakest side. A server overclaiming hash-derived (or
+  // any label on a create side other than hash-derived) is a divergence.
   const serverVerdict = {
     valid: attestation?.valid ?? null,
     signatureValid: attestation?.['signature-valid'] ?? null,
     channelHashValid: attestation?.['channel-hash-valid'] ?? null,
     signedSdHash: server['signed-sd-hash'] ?? null,
+    claimOp: server['claim-op'] ?? null,
+    channelClaimOp: server['channel-claim-op'] ?? null,
+    claimStrength: server['claim-proof-strength'] ?? null,
+    channelStrength: server['channel-claim-proof-strength'] ?? null,
+    proofStrength: server['proof-strength'] ?? null,
   };
   const clientVerdict = {
     valid: clientFailed
@@ -541,18 +564,56 @@ async function serverCrossCheckStep(state, hb, hooks, report) {
     signatureValid: clientFailed ? false : state.verdicts.signatureValid,
     channelHashValid: clientFailed ? false : state.verdicts.channelHashValid,
     signedSdHash: state.verdicts.signedSdHash,
+    claimOp: state.claimOutput?.claimOp ?? null,
+    channelClaimOp: state.channel?.claimOp ?? null,
   };
+  const strengthRow = (key, serverValue, claimOp) => {
+    const expected = clientFailed ? [] : expectedSideStrengths(claimOp);
+    return [
+      key,
+      serverValue,
+      expected.length > 0 ? expected.join(' | ') : null,
+      expected.includes(serverValue),
+    ];
+  };
+  const claimStrengthRow = strengthRow(
+    'claim-proof-strength',
+    serverVerdict.claimStrength,
+    clientVerdict.claimOp
+  );
+  const channelStrengthRow = strengthRow(
+    'channel-claim-proof-strength',
+    serverVerdict.channelStrength,
+    clientVerdict.channelClaimOp
+  );
+  const expectedCombined = clientFailed
+    ? null
+    : weakestStrength(serverVerdict.claimStrength, serverVerdict.channelStrength);
   const rows = [
     ['valid', serverVerdict.valid, clientVerdict.valid],
     ['signature-valid', serverVerdict.signatureValid, clientVerdict.signatureValid],
     ['channel-hash-valid', serverVerdict.channelHashValid, clientVerdict.channelHashValid],
     ['signed-sd-hash', serverVerdict.signedSdHash, clientVerdict.signedSdHash],
-  ];
-  const disagreements = rows.filter(([, s, c]) => s !== c);
+    ['claim-op', serverVerdict.claimOp, clientVerdict.claimOp],
+    ['channel-claim-op', serverVerdict.channelClaimOp, clientVerdict.channelClaimOp],
+  ]
+    .map(([key, s, c]) => [key, s, c, s === c])
+    .concat([
+      claimStrengthRow,
+      channelStrengthRow,
+      [
+        'proof-strength',
+        serverVerdict.proofStrength,
+        expectedCombined,
+        serverVerdict.proofStrength != null &&
+          serverVerdict.proofStrength === expectedCombined,
+      ],
+    ]);
+  const disagreements = rows.filter(([, , , agree]) => !agree);
   state.crossCheck = { rows, disagreements };
   const evidence = rows.map(
-    ([key, s, c]) =>
-      `${key}: server=${fmt(s)} client=${fmt(c)} ${s === c ? 'agree' : '** DISAGREE **'}`
+    ([key, s, c, agree]) =>
+      `${key}: server=${fmt(s)} client=${fmt(c)} ${agree ? 'agree' : '** DISAGREE **'}`
   );
   if (disagreements.length > 0) {
     report(
@@ -562,8 +623,37 @@ async function serverCrossCheckStep(state, hb, hooks, report) {
       evidence
     );
   } else {
-    report('cross-check', 'verified', 'server attestation matches client verdicts', evidence);
+    const trustedUpgrade =
+      serverVerdict.claimStrength === 'ancestor-derived' ||
+      serverVerdict.channelStrength === 'ancestor-derived';
+    report(
+      'cross-check',
+      'verified',
+      trustedUpgrade
+        ? 'server attestation matches client verdicts (ancestor-derived accepted as trusted: ancestry not re-derived client-side)'
+        : 'server attestation matches client verdicts',
+      evidence
+    );
   }
+}
+
+// An on-chain create binds its claim id by hash derivation; an update only
+// asserts it, unless the node walked a signature-authorized ancestry chain
+// back to the create (ancestor-derived) — a proof the client accepts as
+// trusted until it can replay the walk itself.
+function expectedSideStrengths(claimOp) {
+  if (claimOp === 'create') return ['hash-derived'];
+  if (claimOp === 'update') return ['asserted', 'ancestor-derived'];
+  return [];
+}
+
+const RANKED_STRENGTHS = ['asserted', 'ancestor-derived', 'hash-derived'];
+
+function weakestStrength(a, b) {
+  const rankA = RANKED_STRENGTHS.indexOf(a);
+  const rankB = RANKED_STRENGTHS.indexOf(b);
+  if (rankA < 0 || rankB < 0) return null;
+  return RANKED_STRENGTHS[Math.min(rankA, rankB)];
 }
 
 export async function verifyAllBlobs(state, hb, tamper, onProgress) {

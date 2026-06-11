@@ -39,6 +39,17 @@ export const SCENARIOS = [
     label: 'forge the server attestation (step 10 must diverge)',
     expectStep: 'cross-check',
   },
+  {
+    id: 'forge-proof-strength',
+    label: 'forge the server proof-strength label (step 10 must diverge)',
+    expectStep: 'cross-check',
+  },
+  {
+    id: 'forge-channel-strength',
+    label:
+      'overclaim the channel binding as hash-derived (step 10 must diverge; needs an updated channel)',
+    expectStep: 'cross-check',
+  },
 ];
 
 export function tamperHooks(scenario) {
@@ -93,6 +104,30 @@ export function tamperHooks(scenario) {
           'signed-sd-hash':
             '0000000000000000000000000000000000000000000000000000000000000000' +
             '00000000000000000000000000000000',
+        }),
+      };
+    // Catchable in every honest state: hash-derived (both creates) forged
+    // to asserted breaks the combined-vs-sides consistency; asserted or
+    // ancestor-derived forged to hash-derived breaks it the other way. The
+    // residual forgery — upgrading an update's asserted side label to
+    // ancestor-derived — is NOT detectable client-side until the client
+    // walks ancestry itself; see the README.
+    case 'forge-proof-strength':
+      return {
+        serverVerdict: (msg) => ({
+          ...msg,
+          'proof-strength':
+            msg['proof-strength'] === 'hash-derived' ? 'asserted' : 'hash-derived',
+        }),
+      };
+    // Overclaim the channel side: hash-derived is only consistent with a
+    // create channel claim, so on an updated channel the side row diverges.
+    case 'forge-channel-strength':
+      return {
+        serverVerdict: (msg) => ({
+          ...msg,
+          'channel-claim-proof-strength': 'hash-derived',
+          'proof-strength': msg['claim-proof-strength'] ?? msg['proof-strength'],
         }),
       };
     default:

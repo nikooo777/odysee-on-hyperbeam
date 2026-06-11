@@ -22,7 +22,7 @@ export class HbClient {
   }
 
   async fetchJson(path) {
-    const response = await fetch(this.baseUrl + path, {
+    const response = await this.fetchWithRetry(path, {
       headers: { accept: 'application/json' },
     });
     const text = await response.text();
@@ -39,11 +39,22 @@ export class HbClient {
   }
 
   async fetchBytes(path) {
-    const response = await fetch(this.baseUrl + path);
+    const response = await this.fetchWithRetry(path);
     if (!response.ok) {
       throw new HbError(response.status, await response.text(), path);
     }
     return new Uint8Array(await response.arrayBuffer());
+  }
+
+  // The node fronts upstream LBRY infrastructure that occasionally returns
+  // transient errors; retry a 5xx once before concluding anything from it.
+  // All requests here are idempotent GETs, and fail-closed conclusions
+  // (like the anonymous verified-stream case) remain valid after a retry.
+  async fetchWithRetry(path, options) {
+    const response = await fetch(this.baseUrl + path, options);
+    if (response.status < 500) return response;
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    return fetch(this.baseUrl + path, options);
   }
 
   async deref(msg, key) {
