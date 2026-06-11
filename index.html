@@ -13,6 +13,38 @@
           Drop in a claim id, name, or URL. Every step below is re-verified in
           this browser — the HyperBEAM node is treated as an untrusted courier.
         </p>
+        <details class="legend">
+          <summary>how to read this page</summary>
+          <p>
+            Each row is one verification step, with three layers of detail:
+            the one-line outcome is always visible, clicking a row tells the
+            story of what that step proves and what a lying node would look
+            like, and “proof” inside holds the raw values the verdict rests
+            on. The chips mean:
+          </p>
+          <ul>
+            <li>
+              <span class="chip-sample verified">client-verified</span>
+              re-computed in this browser from raw bytes — needs no trust in
+              the node.
+            </li>
+            <li>
+              <span class="chip-sample server">server-claimed</span>
+              the node’s word, displayed for context and re-checked by later
+              steps.
+            </li>
+            <li>
+              <span class="chip-sample trusted">trusted</span>
+              accepted without full in-browser proof — always labeled, never
+              silent.
+            </li>
+            <li>
+              <span class="chip-sample failed">FAILED / SERVER MISMATCH</span>
+              the proof did not hold, or the node’s verdict disagrees with
+              this browser’s.
+            </li>
+          </ul>
+        </details>
         <div class="controls">
           <label>
             node
