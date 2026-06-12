@@ -81,6 +81,23 @@ export function streamSdHash(message) {
   return bytesToHex(sdHash);
 }
 
+// Source.media_type (field 4) of the signed stream claim, or null when the
+// message does not carry one — callers fall back to a default. Best-effort
+// by design: a malformed message returns null rather than failing the chain.
+export function streamMediaType(message) {
+  try {
+    const stream = lengthField(message, 1);
+    if (stream === null) return null;
+    const source = lengthField(stream, 1);
+    if (source === null) return null;
+    const mediaType = lengthField(source, 4);
+    if (mediaType === null) return null;
+    return new TextDecoder('utf-8', { fatal: true }).decode(mediaType);
+  } catch {
+    return null;
+  }
+}
+
 // Returns the raw public-key field bytes: 33-byte compressed SEC1 for
 // modern channels, DER/SPKI for channels created by old lbry-sdk versions.
 // Shape normalization happens in attestation.normalizePublicKey.

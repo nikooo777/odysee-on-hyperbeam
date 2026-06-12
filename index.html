@@ -10,8 +10,11 @@
       <header>
         <h1>odysee-on-hb</h1>
         <p class="subtitle">
-          Drop in a claim id, name, or URL. Every step below is re-verified in
-          this browser — the HyperBEAM node is treated as an untrusted courier.
+          Drop in a claim id, name, URL, or a raw transaction id
+          (<code>txid</code> or <code>txid:nout</code> — render-by-ID, no
+          locator involved). Every step below is re-verified in this browser —
+          the HyperBEAM node is treated as an untrusted courier, and every
+          request it answers is on display under each step.
         </p>
         <details class="legend">
           <summary>how to read this page</summary>
@@ -20,7 +23,13 @@
             the one-line outcome is always visible, clicking a row tells the
             story of what that step proves and what a lying node would look
             like, and “proof” inside holds the raw values the verdict rests
-            on. The chips mean:
+            on. “requests” lists every HTTP exchange the step caused, with
+            the commitment structure of each response parsed and classified —
+            no network tab required. The identity panel below the ladder
+            shows each evidence object's native LBRY id next to its HyperBEAM
+            commitment id, and can fetch the committed form straight from the
+            node's store, where the <code>lbry-*@1.0</code> commitment device
+            appears in <code>Signature-Input</code>. The chips mean:
           </p>
           <ul>
             <li>
@@ -51,7 +60,7 @@
             <input id="node-url" type="text" spellcheck="false" />
           </label>
           <label class="grow">
-            claim id / name / URL
+            claim id / name / URL / txid[:nout]
             <input
               id="target"
               type="text"
@@ -68,6 +77,17 @@
       </header>
       <div id="banner" class="banner" hidden></div>
       <ol id="steps" class="steps"></ol>
+      <section id="identity-section" hidden>
+        <h2>identity panel</h2>
+        <p class="section-note">
+          Every evidence object's native LBRY identifier, its HyperBEAM
+          commitment id (with the conversion rule), and — once observed —
+          its message id. “fetch committed form” reads the object back
+          through the node's store path and parses the signature structure
+          on screen.
+        </p>
+        <div id="identity"></div>
+      </section>
       <section id="playback-section" hidden>
         <div class="playback-controls">
           <button id="play-stream">play (streamed via node — transport-trusted)</button>

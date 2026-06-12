@@ -1,7 +1,8 @@
 import './style.css';
-import { HbClient } from './hb.js';
+import { HbClient, classifyTarget, isTxidTarget } from './hb.js';
 import { runPipeline, verifyAllBlobs } from './pipeline.js';
 import { createStepLadder, resetBanner } from './ui/steps.js';
+import { renderIdentityPanel } from './ui/identity.js';
 import { playStream, playVerifiedBytes, destroyPlayer } from './ui/player.js';
 import { SCENARIOS, tamperHooks } from './tamper.js';
 
@@ -13,6 +14,8 @@ const tamperSelect = document.querySelector('#tamper');
 const verifyButton = document.querySelector('#verify');
 const banner = document.querySelector('#banner');
 const stepsContainer = document.querySelector('#steps');
+const identitySection = document.querySelector('#identity-section');
+const identityContainer = document.querySelector('#identity');
 const playbackSection = document.querySelector('#playback-section');
 const playStreamButton = document.querySelector('#play-stream');
 const playVerifiedButton = document.querySelector('#play-verified');
@@ -41,16 +44,22 @@ async function verify() {
   resetBanner(banner);
   destroyPlayer();
   playbackSection.hidden = true;
+  identitySection.hidden = true;
   playVerifiedButton.disabled = true;
   sweepProgress.textContent = '';
   sweepArmed = false;
 
-  const report = createStepLadder(stepsContainer, banner);
+  const target = classifyTarget(input);
   const hb = new HbClient(node);
+  const report = createStepLadder(stepsContainer, banner, {
+    mode: isTxidTarget(target) ? 'txid' : 'default',
+    exchanges: hb.exchanges,
+  });
   const tamper = tamperHooks(tamperSelect.value);
   try {
     const state = await runPipeline({ input, hb, report, tamper });
     current = { state, hb, tamper };
+    identitySection.hidden = !renderIdentityPanel(identityContainer, state, hb);
     if (state.descriptor && state.verdicts.chainFailed == null) {
       const transportNote =
         'streamed bytes are transport-trusted; spot-checked, not re-verified per slice';

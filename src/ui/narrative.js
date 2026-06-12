@@ -140,6 +140,54 @@ export const STEP_NARRATIVES = {
   },
 };
 
+// Render-by-ID (txid / txid:nout) entry changes what the early steps and
+// the cross-check mean; these variants replace the defaults in that mode.
+export const TXID_NARRATIVES = {
+  input: {
+    question: 'What exactly are we trying to verify?',
+    how:
+      'A transaction id is the double-SHA256 fingerprint of the raw ' +
+      'publish transaction itself. Typing one skips every lookup: no name ' +
+      'resolution, no claim tree, no node-chosen mapping. Everything below ' +
+      'is bound to your typed id by hashing alone — an even stronger root ' +
+      'than a claim id.',
+    catches:
+      'nothing yet — this step fixes the root that everything else is ' +
+      'checked against.',
+  },
+  resolve: {
+    question: 'What does the node say this content is?',
+    how:
+      'Nothing — and that is the point. In render-by-ID mode the node is ' +
+      'never asked to describe or locate the content; the transaction ' +
+      'bytes themselves carry everything the later steps need. Skipping ' +
+      'the locator increases trust: there is no server-chosen mapping left ' +
+      'to lie about.',
+    catches:
+      'not applicable — there is no resolve answer to check in this mode.',
+  },
+  'cross-check': {
+    question:
+      "Does the node's own verdict agree with everything this browser found?",
+    how:
+      'In render-by-ID mode this is a diagnostic comparison, not part of ' +
+      "the proof: nothing above depended on the node's claim resolution. " +
+      'The browser asks the node about the claim id it derived from the ' +
+      'raw bytes and compares verdicts — but only when the node attests ' +
+      'the same outpoint you asked for. If the node has a newer state of ' +
+      'the claim, the comparison is skipped as not applicable rather than ' +
+      'reported as a mismatch.',
+    catches:
+      'a node overstating its verification for this same outpoint — and ' +
+      'nothing else: a different-outpoint answer is not evidence of lying.',
+  },
+};
+
+export function narrativeFor(id, mode) {
+  if (mode === 'txid' && TXID_NARRATIVES[id]) return TXID_NARRATIVES[id];
+  return STEP_NARRATIVES[id];
+}
+
 export const CHIP_EXPLANATIONS = {
   pending: 'Waiting for earlier steps.',
   running: 'Working…',

@@ -2,10 +2,15 @@
 // client-verified bytes. Every cryptographic claim the node makes is
 // re-derived here; the node is only trusted as a transport for
 // content-addressed or signature-bound material.
-import { classifyTarget, HbError } from './hb.js';
+import { classifyTarget, isTxidTarget, HbError } from './hb.js';
 import { parseTxHex, claimOutputAt, txid as txidOf } from './lbry/tx.js';
 import { hexToBytes, bytesToHex, reverseHex } from './lbry/bytes.js';
-import { streamSdHash, channelPublicKey } from './lbry/proto.js';
+import {
+  streamSdHash,
+  channelPublicKey,
+  streamMediaType,
+  lengthField,
+} from './lbry/proto.js';
 import {
   signatureDigest,
   verifyClaimSignature,
@@ -44,29 +49,22 @@ export async function runPipeline({ input, hb, report, tamper = {} }) {
   report('input', 'running');
   const target = classifyTarget(input);
   state.target = target;
-  report(
-    'input',
-    target.kind === 'claim-id' ? 'verified' : 'trusted',
-    target.kind === 'claim-id'
-      ? `claim_id root: ${target.value}`
-      : `${target.kind} input — winning-claim mapping is SDK-trusted`,
-    [`kind: ${target.kind}`, `target: ${target.value}`]
-  );
+  reportInput(target, report);
 
   try {
-    await resolveStep(state, hb, hooks, report);
-    await streamTxStep(state, hb, hooks, report);
+    await resolveStep(state, hb.step('resolve'), hooks, report);
+    await streamTxStep(state, hb.step('stream-tx'), hooks, report);
     await claimOutputStep(state, report);
     if (state.envelope.signed) {
-      await channelEvidenceStep(state, hb, hooks, report);
+      await channelEvidenceStep(state, hb.step('channel'), hooks, report);
       await signatureStep(state, report);
     } else {
       report('channel', 'na', 'not applicable — unsigned claim');
       report('signature', 'na', 'not applicable — unsigned claim');
     }
     await claimSdHashStep(state, report);
-    await descriptorStep(state, hb, hooks, report);
-    await blobSpotCheckStep(state, hb, hooks, report);
+    await descriptorStep(state, hb.step('descriptor'), hooks, report);
+    await blobSpotCheckStep(state, hb.step('blobs'), hooks, report);
   } catch (err) {
     state.verdicts.chainFailed = err;
     if (err.step) {
@@ -76,7 +74,7 @@ export async function runPipeline({ input, hb, report, tamper = {} }) {
     }
   }
 
-  await serverCrossCheckStep(state, hb, hooks, report);
+  await serverCrossCheckStep(state, hb.step('cross-check'), hooks, report);
   return state;
 }
 
@@ -87,8 +85,59 @@ function fail(step, message, evidence) {
   return err;
 }
 
+function reportInput(target, report) {
+  if (isTxidTarget(target)) {
+    const root =
+      target.kind === 'outpoint'
+        ? `${target.value}:${target.nout}`
+        : target.value;
+    report('input', 'verified', `transaction id root (content-addressed): ${root}`, [
+      `kind: ${target.kind}`,
+      `target: ${root}`,
+      'the transaction id is the double-SHA256 of the raw bytes — root equality in the transaction step is even stronger than the claim-id root',
+      'render-by-ID mode: no SDK locator and no claim tree are consulted for the stream object',
+    ]);
+    return;
+  }
+  report(
+    'input',
+    target.kind === 'claim-id' ? 'verified' : 'trusted',
+    target.kind === 'claim-id'
+      ? `claim_id root: ${target.value}`
+      : `${target.kind} input — winning-claim mapping is SDK-trusted`,
+    [`kind: ${target.kind}`, `target: ${target.value}`]
+  );
+}
+
 async function resolveStep(state, hb, hooks, report) {
   report('resolve', 'running');
+  if (isTxidTarget(state.target)) {
+    // Render-by-ID mode synthesizes the little state later steps read from
+    // the resolve result; everything else stays empty on purpose. The
+    // sd-hash step then relies purely on the signed envelope extraction,
+    // which is already the authoritative source.
+    state.resolved = {
+      claimId: null,
+      name: null,
+      txid: state.target.value,
+      nout: state.target.kind === 'outpoint' ? state.target.nout : null,
+      title: null,
+      contentType: null,
+      declaredSize: null,
+      sdHash: hooks.resolveSdHash(null),
+      channelClaimId: null,
+      channelName: null,
+    };
+    report('resolve', 'na', 'render-by-ID mode — no locator used', [
+      `txid (typed): ${state.target.value}`,
+      state.target.kind === 'outpoint'
+        ? `nout (typed): ${state.target.nout}`
+        : 'nout: located after the transaction parses (the only stream claim output)',
+      'no SDK locator and no claim tree are consulted for the stream object',
+      'every later value binds to the typed id by hashing alone — skipping the locator increases trust',
+    ]);
+    return;
+  }
   let msg;
   let raw;
   let value;
@@ -190,18 +239,92 @@ async function streamTxStep(state, hb, hooks, report) {
     `txid: ${tx.txid}`,
     `version: ${tx.version}, inputs: ${tx.inputs.length}, outputs: ${tx.outputs.length}`,
     `first input outpoint: ${tx.inputs[0].prevTxid}:${tx.inputs[0].prevNout}`,
-    'txid equality binds these raw bytes to the resolve-reported outpoint',
+    isTxidTarget(state.target)
+      ? 'txid equality binds these raw bytes to your typed transaction id — this IS the root binding'
+      : 'txid equality binds these raw bytes to the resolve-reported outpoint',
   ]);
+}
+
+// Distinguish stream claims (Claim.stream, field 1) from channel claims
+// (Claim.channel, field 2) without trusting any metadata.
+function claimKindOf(envelope) {
+  if (envelope.encoding !== 'v2-protobuf') return 'unknown';
+  try {
+    if (lengthField(envelope.message, 1) !== null) return 'stream';
+    if (lengthField(envelope.message, 2) !== null) return 'channel';
+  } catch {
+    return 'unknown';
+  }
+  return 'unknown';
 }
 
 async function claimOutputStep(state, report) {
   report('claim-output', 'running');
-  const output = claimOutputAt(state.tx, state.resolved.nout);
-  if (!output) {
+  const txidMode = isTxidTarget(state.target);
+  let output;
+  let autoSelected = false;
+  if (txidMode && state.resolved.nout === null) {
+    // Bare txid: auto-select only when exactly one stream claim output
+    // exists. Auto-selecting a channel claim would only defer the failure
+    // to the sd_hash step with a worse message.
+    const streamOutputs = state.tx.outputs.filter(
+      (candidate) =>
+        candidate.claimEnvelope !== undefined &&
+        claimKindOf(candidate.claimEnvelope) === 'stream'
+    );
+    if (streamOutputs.length === 0) {
+      throw fail('claim-output', 'no stream claim output in this transaction', [
+        `claim-bearing outputs: ${state.tx.outputs.filter((o) => o.claimEnvelope !== undefined).length}`,
+        'render-by-ID mode renders streams; channel or claim-free transactions need a different demo path',
+      ]);
+    }
+    if (streamOutputs.length > 1) {
+      throw fail(
+        'claim-output',
+        'several stream claim outputs — use the explicit txid:nout form',
+        streamOutputs.map((candidate) => `candidate nout: ${candidate.nout}`)
+      );
+    }
+    output = streamOutputs[0];
+    autoSelected = true;
+    state.resolved.nout = output.nout;
+  } else {
+    output = claimOutputAt(state.tx, state.resolved.nout);
+    if (!output) {
+      throw fail(
+        'claim-output',
+        `no claim output at nout ${state.resolved.nout}`
+      );
+    }
+  }
+  state.claimOutput = output;
+  state.envelope = output.claimEnvelope;
+  if (state.envelope.encoding !== 'v2-protobuf') {
     throw fail(
       'claim-output',
-      `no claim output at nout ${state.resolved.nout}`
+      `unsupported claim encoding: ${state.envelope.encoding}`,
+      ['v0/v1 legacy claims fail closed in this PoC']
     );
+  }
+  if (txidMode) {
+    const kind = claimKindOf(state.envelope);
+    if (kind !== 'stream') {
+      throw fail(
+        'claim-output',
+        kind === 'channel'
+          ? 'this outpoint is a channel claim — this demo renders streams'
+          : 'this outpoint does not carry a stream claim',
+        [
+          `outpoint: ${state.resolved.txid}:${state.resolved.nout}`,
+          `claim kind: ${kind}`,
+        ]
+      );
+    }
+    // There is no typed claim id to compare against: for creates the
+    // derived id is client-verified information, for updates it stays
+    // asserted. Later steps read it from here.
+    state.resolved.claimId = output.claimId;
+    state.resolved.contentType = streamMediaType(state.envelope.message);
   }
   // For claim-id inputs the binding root is the USER-TYPED value, never the
   // node-supplied resolve response — otherwise a malicious node could answer
@@ -221,21 +344,27 @@ async function claimOutputStep(state, report) {
       `resolved: ${state.resolved.claimId}`,
     ]);
   }
-  state.claimOutput = output;
-  state.envelope = output.claimEnvelope;
-  if (state.envelope.encoding !== 'v2-protobuf') {
-    throw fail(
-      'claim-output',
-      `unsupported claim encoding: ${state.envelope.encoding}`,
-      ['v0/v1 legacy claims fail closed in this PoC']
-    );
-  }
   const inputIsRoot = state.target.kind === 'claim-id';
   const evidence = [
     `claim op: ${output.claimOp}`,
     `claim_id (${output.claimOp === 'create' ? 'hash160-derived' : 'asserted by update script'}): ${output.claimId}`,
     `envelope: ${state.envelope.encoding}, signed: ${state.envelope.signed}`,
   ];
+  if (autoSelected) {
+    evidence.push(
+      `selected output ${output.nout} (the only stream claim output)`
+    );
+  }
+  if (txidMode) {
+    evidence.push(
+      output.claimOp === 'create'
+        ? 'no typed claim id to compare — the derived id is client-verified information'
+        : 'no typed claim id to compare — the asserted id is reported as-is',
+      state.resolved.contentType
+        ? `media type (from the signed claim protobuf): ${state.resolved.contentType}`
+        : 'media type: not present in the claim — playback falls back to video/mp4'
+    );
+  }
   if (state.envelope.signed) {
     evidence.push(
       `signing channel id: ${state.envelope.signingChannelId}`,
@@ -252,7 +381,7 @@ async function claimOutputStep(state, report) {
     output.claimOp === 'create' ? 'verified' : 'trusted',
     inputIsRoot && output.claimOp === 'create'
       ? 'claim_id derived from raw tx equals your input — root equality holds'
-      : `claim_id ${output.claimOp === 'create' ? 'derived' : 'asserted'}: ${output.claimId}`,
+      : `claim_id ${output.claimOp === 'create' ? 'derived' : 'asserted'}: ${output.claimId}${autoSelected ? ` (selected output ${output.nout})` : ''}`,
     evidence
   );
 }
@@ -385,7 +514,9 @@ async function claimSdHashStep(state, report) {
       state.envelope.signed
         ? 'this hash is inside the channel-signed payload'
         : 'unsigned claim: the root binds to the claim output, no channel signs it',
-      'the SDK-reported sd_hash is never used as the root',
+      isTxidTarget(state.target)
+        ? 'render-by-ID mode: no SDK-reported sd_hash exists — the signed envelope extraction is the only (and authoritative) source'
+        : 'the SDK-reported sd_hash is never used as the root',
     ]
   );
 }
@@ -505,10 +636,32 @@ async function blobSpotCheckStep(state, hb, hooks, report) {
 
 async function serverCrossCheckStep(state, hb, hooks, report) {
   report('cross-check', 'running');
+  const txidMode = isTxidTarget(state.target);
   const clientFailed = state.verdicts.chainFailed != null;
+  // In txid mode this step is a diagnostic facade comparison, not part of
+  // the mode's proof story: the rendering above did not depend on claim
+  // resolution. The facade takes a claim id, so the step-4-derived id is
+  // the only possible target.
+  const facadeTarget = txidMode
+    ? state.claimOutput
+      ? { param: 'claim-id', value: state.claimOutput.claimId }
+      : null
+    : state.target;
+  if (txidMode && facadeTarget === null) {
+    report(
+      'cross-check',
+      'na',
+      'diagnostic facade comparison unavailable — no claim id was derived',
+      [
+        'the verification above did not reach the claim output, so there is nothing to ask the facade about',
+        'render-by-ID verification does not depend on this step',
+      ]
+    );
+    return;
+  }
   let server;
   try {
-    server = hooks.serverVerdict(await hb.verifiedStream(state.target));
+    server = hooks.serverVerdict(await hb.verifiedStream(facadeTarget));
   } catch (err) {
     const reason = describeHttpError(err);
     if (state.envelope && !state.envelope.signed) {
@@ -534,6 +687,35 @@ async function serverCrossCheckStep(state, hb, hooks, report) {
       );
     }
     return;
+  }
+  if (txidMode) {
+    // The full matrix is only meaningful when the server's evidence
+    // outpoint equals the requested one: the server attests the claim's
+    // current state, and the user asked for a specific historical
+    // outpoint. A different (likely newer) outpoint is not a mismatch.
+    const serverStream = await hb.deref(server, 'stream');
+    const serverTxid = serverStream?.txid ?? server.txid ?? null;
+    const serverNout =
+      serverStream?.nout != null ? Number(serverStream.nout) : null;
+    const requested = `${state.resolved.txid}:${state.resolved.nout}`;
+    const serverOutpoint =
+      serverTxid !== null && serverNout !== null
+        ? `${serverTxid}:${serverNout}`
+        : null;
+    if (serverOutpoint !== requested) {
+      report(
+        'cross-check',
+        'na',
+        'server resolved the claim to a different outpoint — diagnostic comparison not meaningful',
+        [
+          `requested outpoint: ${requested}`,
+          `server evidence outpoint: ${serverOutpoint ?? '(unknown)'}`,
+          "the server attests the claim's current state; you asked for a specific historical outpoint",
+          'field-by-field comparison across different outpoints is not meaningful — this is not a mismatch',
+        ]
+      );
+      return;
+    }
   }
   const attestation = await hb.deref(server, 'attestation');
   // The server labels its claim-id binding strength per side
@@ -615,6 +797,13 @@ async function serverCrossCheckStep(state, hb, hooks, report) {
     ([key, s, c, agree]) =>
       `${key}: server=${fmt(s)} client=${fmt(c)} ${agree ? 'agree' : '** DISAGREE **'}`
   );
+  if (txidMode) {
+    evidence.unshift(
+      'diagnostic facade comparison — the render-by-ID proof chain above does not depend on it',
+      `facade asked with the derived claim id: ${facadeTarget.value}`,
+      'server evidence outpoint equals the requested outpoint — full matrix comparison applies'
+    );
+  }
   if (disagreements.length > 0) {
     report(
       'cross-check',
@@ -656,7 +845,8 @@ function weakestStrength(a, b) {
   return RANKED_STRENGTHS[Math.min(rankA, rankB)];
 }
 
-export async function verifyAllBlobs(state, hb, tamper, onProgress) {
+export async function verifyAllBlobs(state, rootHb, tamper, onProgress) {
+  const hb = rootHb.step('playback');
   const hooks = { blobBytes: tamper?.blobBytes ?? ((hash, bytes) => bytes) };
   const blobs = dataBlobs(state.descriptor);
   if (!Number.isInteger(state.exactSize)) {
